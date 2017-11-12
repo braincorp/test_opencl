@@ -76,8 +76,6 @@ struct OpenCLBasic
     cl_command_queue commands;          // compute command queue
     cl_program pointcloud_program;      // compute program
     cl_kernel pointcloud_kernel;        // compute kernel
-    cl_program depth_program;           // compute program
-    cl_kernel depth_kernel;             // compute kernel
     cl_uint max_work_item_dims;         // work group dimensions
     size_t max_work_group_size;         // max number of work items per work group
     size_t max_work_item_sizes[255];// max number of work items per work group
@@ -136,17 +134,10 @@ struct OpenCLBasic
         }
 
         load_build(kernel_full_path, pointcloud_program, "kernel_pointcloud.cl");
-        if (USE_LOCAL_MEM) load_build(kernel_full_path, depth_program, "kernel_depth_local_mem.cl");
-        else load_build(kernel_full_path, depth_program, "kernel_depth.cl");
 
         pointcloud_kernel = clCreateKernel(pointcloud_program, "raytrace_pointcloud", &err);
         if (!pointcloud_kernel || err != CL_SUCCESS) {
             throw std::runtime_error("Error: Failed to create raytrace_pointcloud kernel! " + string(opencl_error_to_str(err)));
-        }
-
-        depth_kernel = clCreateKernel(depth_program, "raytrace_depth", &err);
-        if (!depth_kernel || err != CL_SUCCESS) {
-            throw std::runtime_error("Error: Failed to create raytrace_depth kernel! " + string(opencl_error_to_str(err)));
         }
 
         // get the max number of work items per work group
@@ -218,21 +209,9 @@ struct OpenCLBasic
 
     ~OpenCLBasic () {
         // Release objects in the opposite order of creation
-        if (depth_kernel) {
-            if (VOXEL_DEBUG) std::cout << "Releasing depth kernel " << depth_kernel << std::endl;
-            cl_int err = clReleaseKernel(depth_kernel);
-            SAMPLE_CHECK_ERRORS(err);
-        }
-
         if (pointcloud_kernel) {
             if (VOXEL_DEBUG) std::cout << "Releasing pointcloud kernel " << pointcloud_kernel << std::endl;
             cl_int err = clReleaseKernel(pointcloud_kernel);
-            SAMPLE_CHECK_ERRORS(err);
-        }
-
-        if (depth_program) {
-            if (VOXEL_DEBUG) std::cout << "Releasing depth program " << depth_program << std::endl;
-            cl_int err = clReleaseProgram(depth_program);
             SAMPLE_CHECK_ERRORS(err);
         }
 
@@ -674,251 +653,6 @@ public:
         return process_markings(valid_packed_markings, do_marking, writeable_volume,
                                 writeable_column_counts, writeable_known,
                                 n_voxels_per_uint32, bit_check_masks_buf.get_ptr(), bit_mark_single_weight_buf.get_ptr());
-    }
-
-    numpy_boost<boost::int16_t, 2> raytrace_defaults(const numpy_boost<boost::uint32_t, 3>& volume,
-                                                     int n_voxels,
-                                                     const numpy_boost<boost::uint8_t, 2>& column_counts,
-                                                     const numpy_boost<boost::uint8_t, 2>& known,
-                                                     const numpy_boost<boost::int16_t, 2>& line_defs,
-                                                     const numpy_boost<boost::int32_t, 1>& idx,
-                                                     const numpy_boost<float, 1>& ranges,
-                                                     const numpy_boost<boost::int16_t, 1>& pixel_origin,
-                                                     const numpy_boost<float, 1>& raytrace_and_obstacle_range,
-                                                     short max_z_clearing_for_known,
-                                                     bool do_clearing, bool do_marking) {
-        // A wrapper for the same function with default z_mark_lims, beam_width and weights*/
-        int w_dims[] = { 1 };
-        numpy_boost<boost::int16_t, 1> weights(w_dims);
-        weights[0] = 1;
-        int z_dims[] = { 2 };
-        numpy_boost<boost::int16_t, 1> z_mark_lims(z_dims);
-        z_mark_lims[0] = 0;
-        z_mark_lims[1] = SHRT_MAX;
-        return raytrace(volume, n_voxels, column_counts, known, line_defs, idx, ranges,
-                        pixel_origin, raytrace_and_obstacle_range, max_z_clearing_for_known,
-                        do_clearing, do_marking, weights, z_mark_lims);
-    }
-
-    numpy_boost<boost::int16_t, 2> raytrace(const numpy_boost<boost::uint32_t, 3>& volume,
-                                            int n_voxels,
-                                            const numpy_boost<boost::uint8_t, 2>& column_counts,
-                                            const numpy_boost<boost::uint8_t, 2>& known,
-                                            const numpy_boost<boost::int16_t, 2>& line_defs,
-                                            const numpy_boost<boost::int32_t, 1>& idx,
-                                            const numpy_boost<float, 1>& ranges,
-                                            const numpy_boost<boost::int16_t, 1>& pixel_origin,
-                                            const numpy_boost<float, 1>& raytrace_and_obstacle_range,
-                                            short max_z_clearing_for_known,
-                                            bool do_clearing, bool do_marking,
-                                            const numpy_boost<boost::int16_t, 1>& weights,
-                                            const numpy_boost<boost::int16_t, 1>& z_mark_lims,
-                                            int beam_width=0)
-    /* This function traces clearing scans in a 3d voxel volume. Parameters:
-
-    volume: a uint64 matrix with the Y x X x 1+(n_voxels-1)/64 3d voxel volume that will be marked. z voxels are bits,
-        so the z dimension of the matrix is 1+(n_voxels-1)/64. It is passed as const because
-        boost numpy doesn't allow anything else, but still it is modified in place by using const_cast
-    n_voxels: number of voxels
-    column_counts: the Y x X 2d array with the count of marked voxels in each column; it is passed as const because
-        boost numpy doesn't allow anything else, but still it is modified in place by using const_cast.
-        At any time column_counts can be directly computed from volume, but updating it on the fly
-        is faster.
-    known: for each voxel column, whether something is known about some voxel in the column. Each
-        cleared or marked voxel will set the corresponding value in known to 1.
-    line_defs: a m x 6 matrix of pre-calculated (x0, y0, z0) and (dx, dy, dz) values for rays that can be traced;
-        dx, dy, dz are signed
-    idx: a n-vector with the indices in the first dimension of the lines (and lengths) array
-        of the rays that will be traced.
-    ranges: another n-vector with the range of each ray to trace (in meters); a range of 0 means the ray
-        will be ignored
-    pixel_origin: (x, y) origin of the given scan in the 3d voxel volume (no shift in z is expected)
-    raytrace_and_obstacle_range: two floats:
-        raytrace_range: rays will only be traced up to this distance (in world units) from their origins
-        obstacle_range: marks will be returned only for rays that end closer than this from their origin
-    max_z_clearing_for_known: clearing above this voxel index will not mark the column as known;
-        to be considered known a column must have a mark at any height, or a clear at or below this level
-    do_clearing: if True, rays are cleared
-    do_marking: if True, marks are also set in the volume (and in the column_counts); marks are set
-        with a 1 in the voxel
-    weights: for each traced ray, the weight of the corresponding mark; can also be a single number,
-        which will be applied to all rays. The default is 1. It doesn't make sense to make it bigger
-        than marking_threshold.
-    z_mark_lims: a two-element vector (min_z, max_z), being the z voxel indices outside which
-        marking will not happen. Besides, clearing will not happen below the min_z limit (but
-        it will above the max_z). Marks whose z voxel coordinate is outside those
-        limits will not be returned either.
-    beam_width: if > 0, the clearing rays will be thickened in the x and y direction by this number
-        of pixels (on each side)
-    Returns:
-    A l x 3 array with the (y, x, z) voxel coordinates (in the voxel volume) of marks; l <= n because
-        some of the rays will not produce marks (because they fall outside the volume, or further than
-        obstacle_range or raytrace_range). The marks are returned independently of whether do_marking
-        is True or False
-    */
-    {
-        std::chrono::steady_clock::time_point begin_time;
-        begin_time = std::chrono::steady_clock::now();
-
-        cl_int err = CL_SUCCESS;
-        const bool debug = VOXEL_DEBUG;
-
-        if (n_voxels > MAX_VOXELS) throw std::runtime_error((boost::format("Number of voxels %i too big (max is %i)") % n_voxels % MAX_VOXELS).str());
-        if (weights.size() != idx.size() && weights.size() != 1) throw std::runtime_error((boost::format("weights length (%i) was expected to be either 1 or equal to idx length (%i)") % weights.size() % idx.size()).str());
-        short max_x = volume.shape()[1];
-        short max_y = volume.shape()[0];
-        short max_z = n_voxels;
-
-        cl_mem volume_g = volume_buf.allocate_from_numpy(volume, "volume", debug, ocl);
-        cl_mem known_g = known_buf.allocate_from_numpy(known, "known", debug, ocl);
-        cl_mem column_counts_g = column_counts_buf.allocate_from_numpy(column_counts, "column_counts", debug, ocl);
-        cl_mem line_defs_g = line_defs_buf.allocate_from_numpy(line_defs, "line_defs", debug, ocl, true, true);
-        cl_mem idx_g = idx_buf.allocate_from_numpy(idx, "idx", debug, ocl, false, true);
-        cl_mem ranges_g = ranges_buf.allocate_from_numpy(ranges, "ranges", debug, ocl, false, true);
-        cl_mem packed_markings_g = packed_markings_buf.allocate_for_flat_array(idx.shape()[0], "packed_markings", debug, ocl);
-        cl_mem bit_check_masks_g = bit_check_masks_buf.get_gpu_mem();
-        cl_mem bit_clear_masks_g = bit_clear_masks_buf.get_gpu_mem();
-        err = clFinish(ocl.commands);
-        SAMPLE_CHECK_ERRORS(err);
-
-        this->_memory_in_time += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin_time).count();
-        begin_time = std::chrono::steady_clock::now();
-
-        const short x0 = pixel_origin[0];
-        const short y0 = pixel_origin[1];
-        const unsigned int dim_0 = volume.shape()[0];
-        const unsigned int dim_1 = volume.shape()[1];
-        const unsigned int dim_2 = volume.shape()[2];
-        const unsigned int stride_0 = volume.strides()[0];
-        const unsigned int stride_1 = volume.strides()[1];
-        const float raytrace_range_g = raytrace_and_obstacle_range[0];
-        const float obstacle_range_g = raytrace_and_obstacle_range[1];
-        const uint8_t do_clearing_g = do_clearing;
-        const uint8_t do_marking_g = do_marking;
-        const float sq_xy_resolution = xy_resolution * xy_resolution;
-        const float sq_z_resolution = z_resolution * z_resolution;
-        const short z_mark_min = z_mark_lims[0];
-        const short z_mark_max = z_mark_lims[1];
-        const short max_z_clearing_for_known_g = max_z_clearing_for_known;
-        const short n_voxels_per_uint32_g = n_voxels_per_uint32;
-        const int tot_rays = (int)(idx.shape()[0]);
-        size_t bytes_per_row = sizeof(boost::uint32_t) * (1 + (n_voxels - 1) / n_voxels_per_uint32) * volume.shape()[1];
-        unsigned int local_mem_to_use = ocl.local_mem_size / 2;
-        assert(local_mem_to_use >= 32768);
-        const unsigned int rows_per_workgroup = 32768 / bytes_per_row;
-        assert(rows_per_workgroup >= 1);
-        size_t n_workgroups = (volume.shape()[0] - 1) / rows_per_workgroup + 1;
-        const unsigned int max_work_group_size = std::min(idx.shape()[0], ocl.max_work_group_size/2);
-
-        {
-            ScopedGILRelease releaseGIL;
-
-            cl_kernel* kernel = &ocl.depth_kernel;
-            err = clSetKernelArg(*kernel, 0, sizeof(cl_mem), &volume_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 1, sizeof(cl_mem), &known_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 2, sizeof(cl_mem), &column_counts_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 3, sizeof(cl_mem), &line_defs_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 4, sizeof(cl_mem), &idx_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 5, sizeof(cl_mem), &ranges_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 6, sizeof(short), &x0);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 7, sizeof(short), &y0);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 8, sizeof(unsigned int), &dim_0);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 9, sizeof(unsigned int), &dim_1);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 10, sizeof(unsigned int), &n_voxels);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 11, sizeof(unsigned int), &stride_0);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 12, sizeof(unsigned int), &stride_1);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 13, sizeof(float), &raytrace_range_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 14, sizeof(float), &obstacle_range_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 15, sizeof(uint8_t), &do_clearing_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 16, sizeof(uint8_t), &do_marking_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 17, sizeof(cl_mem), &packed_markings_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 18, sizeof(float), &sq_xy_resolution);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 19, sizeof(float), &sq_z_resolution);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 20, sizeof(short), &z_mark_min);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 21, sizeof(short), &z_mark_max);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 22, sizeof(short), &max_z_clearing_for_known_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 23, sizeof(int), &beam_width);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 24, sizeof(cl_mem), &bit_check_masks_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 25, sizeof(cl_mem), &bit_clear_masks_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 26, sizeof(short), &n_voxels_per_uint32_g);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 27, sizeof(int), &tot_rays);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 28, sizeof(unsigned int), &rows_per_workgroup);
-            SAMPLE_CHECK_ERRORS(err);
-            err = clSetKernelArg(*kernel, 29, sizeof(unsigned int), &max_work_group_size);
-            SAMPLE_CHECK_ERRORS(err);
-
-            if (USE_LOCAL_MEM) {
-                /* In this case the strategy is to divide the costmap into chunks that fit in GPU
-                   local memory; one workgroup will be assigned to each chunk. Each workgroup
-                   will raytrace every ray, but actually only do clearing in its corresponding
-                   chunk. The workgroup with id=0 takes care of filling in the markings.
-                   The result is many more threads, but each operating only on local memory.
-                   Turns out to be much slower than the non-local approach
-                */
-                size_t local_work_size[1] = {max_work_group_size};
-                size_t global_work_size[1] = {max_work_group_size * n_workgroups};
-                if (VOXEL_DEBUG) std::cout << "Launching " << n_workgroups << " workgroups with " << max_work_group_size << " work items each" << std::endl;
-                err = clEnqueueNDRangeKernel(ocl.commands, ocl.depth_kernel, 1, NULL, global_work_size, local_work_size, 0, NULL, NULL);
-            }
-            else {
-                /* In this case the strategy is simply using one thread per ray. All
-                   threads do clearing of their rays directly in global memory.
-                */
-                size_t global_work_size[1] = {idx.shape()[0]};
-                if (VOXEL_DEBUG) std::cout << "Launching " << idx.shape()[0] << " threads" << std::endl;
-                err = clEnqueueNDRangeKernel(ocl.commands, ocl.depth_kernel, 1, NULL, global_work_size, NULL, 0, NULL, NULL);
-            }
-            SAMPLE_CHECK_ERRORS(err);
-            err = clFinish(ocl.commands);
-            SAMPLE_CHECK_ERRORS(err);
-
-            this->_kernel_time += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin_time).count();
-            begin_time = std::chrono::steady_clock::now();
-
-            volume_buf.ensure_copy_from_gpu_to_cpu(ocl);
-            known_buf.ensure_copy_from_gpu_to_cpu(ocl);
-            column_counts_buf.ensure_copy_from_gpu_to_cpu(ocl);
-            line_defs_buf.ensure_copy_from_gpu_to_cpu(ocl);
-            idx_buf.ensure_copy_from_gpu_to_cpu(ocl);
-            ranges_buf.ensure_copy_from_gpu_to_cpu(ocl);
-            packed_markings_buf.ensure_copy_from_gpu_to_cpu(ocl);
-
-            err = clFinish(ocl.commands);
-            SAMPLE_CHECK_ERRORS(err);
-        }
-
-        auto result = filter_and_process_markings(packed_markings_buf, do_marking, volume, n_voxels, column_counts, known, weights);
-
-        this->_memory_out_time += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin_time).count();
-        return result;
     }
 
     numpy_boost<boost::int16_t, 2> get_voxels(const numpy_boost<boost::uint32_t, 3>& volume,
