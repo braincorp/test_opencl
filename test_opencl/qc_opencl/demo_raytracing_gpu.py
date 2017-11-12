@@ -3,10 +3,9 @@ import logging
 import time
 import sys
 
-from shining_software.qc_opencl.raytracing_opencl_kernels.gpu_utils import get_opencl_kernel_path
+from test_opencl.qc_opencl.raytracing_opencl_kernels.gpu_utils import get_opencl_kernel_path
 from test_opencl._wrapper_test_opencl_module import TestOpenCLVoxelRaytraceWrapperGpu
 from test_opencl._wrapper_test_opencl_module import has_gpu_support
-
 
 
 def aligned_malloc(shape, dtype, fill_values=0):
