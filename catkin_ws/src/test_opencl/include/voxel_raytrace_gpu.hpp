@@ -1,5 +1,5 @@
 #include <boost/python.hpp>
-#include <shining_utils/numpy_boost_python.hpp>
+#include "numpy_boost_python.hpp"
 #include <boost/format.hpp>
 #include <raytrace_utils.hpp>
 #include <iostream>

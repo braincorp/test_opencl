@@ -2,7 +2,7 @@
 #define _RAYTRACE_UTILS_
 
 #include <boost/python.hpp>
-#include <shining_utils/numpy_boost_python.hpp>
+#include "numpy_boost_python.hpp"
 #include <iostream>
 #define MAX_VOXELS 255
 

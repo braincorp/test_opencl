@@ -25,7 +25,6 @@ pythonpathadd() {
 pythonpathadd $DIR
 pythonpathadd $DIR/catkin_ws/src
 
-
 # If you can not compile opencv on mac, there is a workaround to use brew opencv
 # brew tap homebrew/science
 # brew install opencv

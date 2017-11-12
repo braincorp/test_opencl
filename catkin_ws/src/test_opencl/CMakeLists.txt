@@ -2,7 +2,6 @@ project(test_opencl)
 set(PROJECT_NAME test_opencl)
 set(CMAKE_CXX_FLAGS "-std=c++0x ${CMAKE_CXX_FLAGS}")
 
-find_package(catkin REQUIRED COMPONENTS shining_utils)
 find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
 
