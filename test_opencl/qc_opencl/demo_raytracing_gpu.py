@@ -67,27 +67,27 @@ def demo_raytracing_gpu():
     print "Checking for GPU Support"
     if has_gpu_support(False)==0:
         print "No opencl support, Segmentation Fault (Core dump) is expected"
+    else:
+        marking_threshold = 1
+        voxel_gpu_tracer = TestOpenCLVoxelRaytraceWrapperGpu(0.03, 0.03, marking_threshold, get_opencl_kernel_path())
 
-    marking_threshold = 1
-    voxel_gpu_tracer = TestOpenCLVoxelRaytraceWrapperGpu(0.03, 0.03, marking_threshold, get_opencl_kernel_path())
-
-    print "Loaded gpu wrapper"
-    n_voxels = 10
-    v, counts, known = make_full_volume((10, 10), n_voxels, marking_threshold)
-    points = aligned_malloc((2, 3), dtype=np.int16)
-    points[0, 0] = 9
-    points[0, 1] = 9
-    points[0, 2] = 4
-    points[1, 0] = 9
-    points[1, 1] = 9
-    points[1, 2] = 4
-    voxel_origin = np.array([4, 4, 4], dtype=np.int16)
-    t = time.time()
-    valid = voxel_gpu_tracer.raytrace_pointcloud(v, n_voxels, counts, known, points, voxel_origin, 200., 200., True, True)
-    print "known:\n", known
-    print "counts:\n", counts
-    print "valids:\n", valid
-    print "volume:\n", v
+        print "Loaded gpu wrapper"
+        n_voxels = 10
+        v, counts, known = make_full_volume((10, 10), n_voxels, marking_threshold)
+        points = aligned_malloc((2, 3), dtype=np.int16)
+        points[0, 0] = 9
+        points[0, 1] = 9
+        points[0, 2] = 4
+        points[1, 0] = 9
+        points[1, 1] = 9
+        points[1, 2] = 4
+        voxel_origin = np.array([4, 4, 4], dtype=np.int16)
+        t = time.time()
+        valid = voxel_gpu_tracer.raytrace_pointcloud(v, n_voxels, counts, known, points, voxel_origin, 200., 200., True, True)
+        print "known:\n", known
+        print "counts:\n", counts
+        print "valids:\n", valid
+        print "volume:\n", v
 
 if __name__ == "__main__":
     logging.getLogger().setLevel(level=logging.INFO)
