@@ -480,7 +480,7 @@ public:
                               const numpy_boost<boost::int16_t, 2>& endpoints,
                               const numpy_boost<boost::int16_t, 1>& origin,
                               float raytrace_range, float obstacle_range,
-                              short max_z_clearing_for_known,
+                              //short max_z_clearing_for_known,
                               bool do_clearing, bool do_marking)
     {
         cl_int err = CL_SUCCESS;
@@ -518,7 +518,7 @@ public:
         const uint8_t do_marking_g = do_marking;
         const float sq_xy_resolution = xy_resolution * xy_resolution;
         const float sq_z_resolution = z_resolution * z_resolution;
-        const short max_z_clearing_for_known_g = max_z_clearing_for_known;
+        const short max_z_clearing_for_known_g = 0; // max_z_clearing_for_known;
         const short n_voxels_per_uint32_g = n_voxels_per_uint32;
 
         cl_kernel* kernel = &ocl.pointcloud_kernel;
