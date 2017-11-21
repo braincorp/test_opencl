@@ -16,7 +16,7 @@ BOOST_PYTHON_MODULE(_wrapper_test_opencl_module)
 
     py::register_exception_translator<std::runtime_error>(&translate_exception);
     py::def("has_gpu_support", has_gpu_support, py::arg("debug"));
-    py::class_<VoxelRaytraceBoostWrapperGpu>("VoxelRaytraceBoostWrapperGpu", boost::python::init<float, float, unsigned int, string const &>())
+    py::class_<VoxelRaytraceBoostWrapperGpu>("TestOpenCLVoxelRaytraceWrapperGpu", boost::python::init<float, float, unsigned int, string const &>())
             .def("raytrace_pointcloud", &VoxelRaytraceBoostWrapperGpu::raytrace_pointcloud)
             .def("print_debug_statistics", &VoxelRaytraceBoostWrapperGpu::print_debug_statistics)
     ;
