@@ -11,8 +11,8 @@
 #include "CL/cl_ext.h"
 #include "gpu_utils.h"
 
-#define PRINT_DEBUG false
-#define VOXEL_DEBUG false
+#define PRINT_DEBUG true
+#define VOXEL_DEBUG true
 #define USE_LOCAL_MEM false
 #define RAWSIZE(m) (m.num_elements() * sizeof(*(m.data())))
 #define ZEROCOPYSIZE(m) (zeroCopySizeAlignment(RAWSIZE(m)))
