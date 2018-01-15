@@ -15,7 +15,7 @@ def aligned_malloc(shape, dtype, fill_values=0):
     :param shape, dtype: for the numpy array
     :param fill_values: values will be initialized to this
     '''
-    INTEL_GPU_MEM_ALIGNMENT = 4096
+    INTEL_GPU_MEM_ALIGNMENT = 2048  # 4096
     INTEL_GPU_CACHE_ALIGNMENT = 64
 
     alignment = INTEL_GPU_MEM_ALIGNMENT  # starting pointer alignment
